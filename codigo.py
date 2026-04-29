@@ -30,8 +30,24 @@ def ler_excel(arquivo) -> pd.DataFrame:
     # Detecta HTML disfarçado de xls (comum em sistemas legados como Oper)
     amostra = conteudo[:10]
     if amostra.startswith(b"<") or amostra.startswith(b"\xef\xbb\xbf<"):
-        tabelas = pd.read_html(BytesIO(conteudo), header=0)
-        return tabelas[0] if tabelas else pd.DataFrame()
+        # Tenta diferentes combinações de tabela + linha de header
+        for header_row in range(0, 5):
+            try:
+                todas = pd.read_html(BytesIO(conteudo), header=header_row, flavor="lxml")
+            except Exception:
+                try:
+                    todas = pd.read_html(BytesIO(conteudo), header=header_row, flavor="html5lib")
+                except Exception:
+                    continue
+
+            for df in todas:
+                colunas = [str(c).strip() for c in df.columns]
+                # Retorna a primeira tabela que tenha ao menos 3 colunas com nome real
+                if sum(1 for c in colunas if not c.startswith("Unnamed") and c != "nan") >= 3:
+                    df.columns = [str(c).strip() for c in df.columns]
+                    return df
+
+        return pd.DataFrame()
 
     if nome.endswith(".xls"):
         return pd.read_excel(BytesIO(conteudo), engine="xlrd")
