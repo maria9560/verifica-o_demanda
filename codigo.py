@@ -1,37 +1,46 @@
 import streamlit as st
 import pandas as pd
-import re
 from io import BytesIO
 from datetime import datetime
 
-st.set_page_config(
-    page_title="Comparador de Bases",
-    page_icon="🔍",
-    layout="wide"
-)
+st.set_page_config(page_title="Comparador de Bases", page_icon="🔍", layout="wide")
 
 st.title("🔍 Comparador de Bases — Serviços Divergentes")
-st.markdown("Carregue duas bases Excel e identifique os serviços divergentes por data limite.")
+st.markdown("Carregue as bases **Cbill** e **Oper** para identificar serviços divergentes por data limite.")
 
-# ─── helpers ────────────────────────────────────────────────────────────────
+# ─── mapeamento fixo de colunas por sistema ──────────────────────────────────
+COLUNAS_POR_SISTEMA = {
+    "cbill": ("Serviço",  "Prazo de execução"),
+    "oper":  ("Numero",   "Data/Hora Limite"),
+}
+
+# ─── helpers ─────────────────────────────────────────────────────────────────
 
 def extrair_sistema(nome_arquivo: str) -> str:
-    """Extrai o nome do sistema a partir do nome do arquivo.
-    Exemplo: 'base_29.04_Cbill.xlsx' → 'Cbill'
-    """
     nome = nome_arquivo.replace(".xlsx", "").replace(".xls", "")
     partes = nome.split("_")
-    if len(partes) >= 3:
-        return partes[-1]
-    return nome
+    return partes[-1] if len(partes) >= 3 else nome
+
+
+def ler_excel(arquivo) -> pd.DataFrame:
+    nome = arquivo.name.lower()
+    conteudo = arquivo.read()
+    arquivo.seek(0)
+
+    # Detecta HTML disfarçado de xls (comum em sistemas legados como Oper)
+    amostra = conteudo[:10]
+    if amostra.startswith(b"<") or amostra.startswith(b"\xef\xbb\xbf<"):
+        tabelas = pd.read_html(BytesIO(conteudo), header=0)
+        return tabelas[0] if tabelas else pd.DataFrame()
+
+    if nome.endswith(".xls"):
+        return pd.read_excel(BytesIO(conteudo), engine="xlrd")
+    else:
+        return pd.read_excel(BytesIO(conteudo), engine="openpyxl")
 
 
 def normalizar_datas(df: pd.DataFrame, col: str) -> pd.DataFrame:
-    """Tenta converter a coluna de data para datetime."""
-    try:
-        df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
-    except Exception:
-        pass
+    df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
     return df
 
 
@@ -40,144 +49,138 @@ def exportar_excel(df: pd.DataFrame) -> bytes:
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Divergentes")
         ws = writer.sheets["Divergentes"]
-        # Ajusta largura das colunas
         for col_cells in ws.columns:
             max_len = max(len(str(c.value)) if c.value else 0 for c in col_cells)
             ws.column_dimensions[col_cells[0].column_letter].width = max(max_len + 4, 14)
     return buf.getvalue()
 
-# ─── sidebar — configuração ─────────────────────────────────────────────────
+# ─── sidebar ─────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.header("⚙️ Configuração")
-    col_servico = st.text_input("Nome da coluna de Serviço", value="servico",
-                                help="Nome exato da coluna que identifica o serviço nas planilhas")
-    col_data    = st.text_input("Nome da coluna de Data Limite", value="data_limite",
-                                help="Nome exato da coluna de data limite")
-    data_filtro = st.date_input("Data limite a comparar", value=datetime.today(),
-                                help="Filtra apenas os serviços desta data")
+    data_filtro = st.date_input("Data limite a comparar", value=datetime.today())
     st.markdown("---")
-    st.info("💡 **Padrão de nome esperado:**\n`base_DD.MM_Sistema.xlsx`\n\nExemplo:\n`base_29.04_Cbill.xlsx`")
+    st.markdown("**Colunas utilizadas por sistema:**")
+    st.markdown("🔵 **Cbill:** `Serviço` · `Prazo de execução`")
+    st.markdown("🟠 **Oper:** `Numero` · `Data/Hora Limite`")
+    st.markdown("---")
+    st.info("💡 **Padrão de nome esperado:**\n`base_DD.MM_Cbill.xlsx`\n`base_DD.MM_oper.xls`")
 
-# ─── upload das bases ────────────────────────────────────────────────────────
+# ─── upload ───────────────────────────────────────────────────────────────────
 
 col1, col2 = st.columns(2)
-
 with col1:
-    st.subheader("📂 Base 1")
-    arquivo1 = st.file_uploader("Selecione a primeira base", type=["xlsx", "xls"], key="base1")
-
+    st.subheader("📂 Base Cbill")
+    arquivo1 = st.file_uploader("Selecione a base Cbill", type=["xlsx", "xls"], key="base1")
 with col2:
-    st.subheader("📂 Base 2")
-    arquivo2 = st.file_uploader("Selecione a segunda base", type=["xlsx", "xls"], key="base2")
+    st.subheader("📂 Base Oper")
+    arquivo2 = st.file_uploader("Selecione a base Oper", type=["xlsx", "xls"], key="base2")
 
-# ─── processamento ───────────────────────────────────────────────────────────
+# ─── processamento ────────────────────────────────────────────────────────────
 
 if arquivo1 and arquivo2:
     try:
         sistema1 = extrair_sistema(arquivo1.name)
         sistema2 = extrair_sistema(arquivo2.name)
 
-        df1 = pd.read_excel(arquivo1)
-        df2 = pd.read_excel(arquivo2)
+        cfg1 = COLUNAS_POR_SISTEMA.get(sistema1.lower())
+        cfg2 = COLUNAS_POR_SISTEMA.get(sistema2.lower())
+
+        if not cfg1:
+            st.error(f"❌ Sistema **{sistema1}** não reconhecido. O arquivo deve ter `_Cbill` ou `_oper` no nome.")
+            st.stop()
+        if not cfg2:
+            st.error(f"❌ Sistema **{sistema2}** não reconhecido. O arquivo deve ter `_Cbill` ou `_oper` no nome.")
+            st.stop()
+
+        col_srv1, col_dt1 = cfg1
+        col_srv2, col_dt2 = cfg2
+
+        with st.spinner("Carregando bases..."):
+            df1 = ler_excel(arquivo1)
+            df2 = ler_excel(arquivo2)
 
         # Valida colunas
-        colunas_necessarias = [col_servico, col_data]
-        for nome, df, arq in [(sistema1, df1, arquivo1.name), (sistema2, df2, arquivo2.name)]:
-            ausentes = [c for c in colunas_necessarias if c not in df.columns]
+        for sistema, df, arq, cols in [
+            (sistema1, df1, arquivo1.name, [col_srv1, col_dt1]),
+            (sistema2, df2, arquivo2.name, [col_srv2, col_dt2]),
+        ]:
+            ausentes = [c for c in cols if c not in df.columns]
             if ausentes:
-                st.error(f"❌ Arquivo **{arq}** não tem as colunas: `{'`, `'.join(ausentes)}`\n\n"
-                         f"Colunas encontradas: `{'`, `'.join(df.columns.tolist())}`")
+                st.error(
+                    f"❌ **{arq}** — colunas não encontradas: `{'`, `'.join(ausentes)}`\n\n"
+                    f"Colunas disponíveis: `{'`, `'.join(df.columns.tolist())}`"
+                )
                 st.stop()
 
-        # Normaliza datas
-        df1 = normalizar_datas(df1, col_data)
-        df2 = normalizar_datas(df2, col_data)
+        df1 = normalizar_datas(df1, col_dt1)
+        df2 = normalizar_datas(df2, col_dt2)
 
-        # Filtra pela data escolhida
-        data_alvo = pd.Timestamp(data_filtro)
-        mask1 = df1[col_data].dt.date == data_alvo.date()
-        mask2 = df2[col_data].dt.date == data_alvo.date()
+        data_alvo = pd.Timestamp(data_filtro).date()
+        base1 = df1[df1[col_dt1].dt.date == data_alvo].copy()
+        base2 = df2[df2[col_dt2].dt.date == data_alvo].copy()
 
-        base1_filtrada = df1[mask1].copy()
-        base2_filtrada = df2[mask2].copy()
+        total1, total2 = len(base1), len(base2)
 
-        total1 = len(base1_filtrada)
-        total2 = len(base2_filtrada)
-
-        # Métricas rápidas
         st.markdown("---")
         m1, m2, m3 = st.columns(3)
         m1.metric(f"Serviços em {sistema1}", total1)
         m2.metric(f"Serviços em {sistema2}", total2)
         m3.metric("Diferença", abs(total1 - total2))
 
-        # Identifica divergentes (serviços que existem em uma base mas não na outra)
-        servicos1 = set(base1_filtrada[col_servico].astype(str).str.strip())
-        servicos2 = set(base2_filtrada[col_servico].astype(str).str.strip())
+        srvs1 = set(base1[col_srv1].astype(str).str.strip())
+        srvs2 = set(base2[col_srv2].astype(str).str.strip())
 
-        apenas_em_1 = servicos1 - servicos2   # presentes só na base 1
-        apenas_em_2 = servicos2 - servicos1   # presentes só na base 2
+        apenas_em_1 = srvs1 - srvs2
+        apenas_em_2 = srvs2 - srvs1
 
-        registros_divergentes = []
+        registros = []
 
         for srv in sorted(apenas_em_1):
-            linhas = base1_filtrada[base1_filtrada[col_servico].astype(str).str.strip() == srv]
+            linhas = base1[base1[col_srv1].astype(str).str.strip() == srv]
             for _, row in linhas.iterrows():
-                registros_divergentes.append({
-                    "servico": row[col_servico],
-                    "data_limite": row[col_data].date() if pd.notna(row[col_data]) else data_filtro,
+                registros.append({
+                    "servico":        row[col_srv1],
+                    "data_limite":    row[col_dt1].date() if pd.notna(row[col_dt1]) else data_filtro,
                     "sistema_origem": sistema1,
-                    "presente_em": sistema1,
-                    "ausente_em": sistema2,
+                    "presente_em":    sistema1,
+                    "ausente_em":     sistema2,
                 })
 
         for srv in sorted(apenas_em_2):
-            linhas = base2_filtrada[base2_filtrada[col_servico].astype(str).str.strip() == srv]
+            linhas = base2[base2[col_srv2].astype(str).str.strip() == srv]
             for _, row in linhas.iterrows():
-                registros_divergentes.append({
-                    "servico": row[col_servico],
-                    "data_limite": row[col_data].date() if pd.notna(row[col_data]) else data_filtro,
+                registros.append({
+                    "servico":        row[col_srv2],
+                    "data_limite":    row[col_dt2].date() if pd.notna(row[col_dt2]) else data_filtro,
                     "sistema_origem": sistema2,
-                    "presente_em": sistema2,
-                    "ausente_em": sistema1,
+                    "presente_em":    sistema2,
+                    "ausente_em":     sistema1,
                 })
 
-        df_resultado = pd.DataFrame(registros_divergentes)
-
-        # ─── exibição dos resultados ─────────────────────────────────────────
+        df_resultado = pd.DataFrame(registros)
 
         st.markdown("---")
 
         if df_resultado.empty:
             st.success("✅ Nenhuma divergência encontrada! As bases estão alinhadas para esta data.")
         else:
-            st.warning(f"⚠️ **{len(df_resultado)} serviço(s) divergente(s)** encontrado(s) em {data_filtro.strftime('%d/%m/%Y')}")
+            st.warning(f"⚠️ **{len(df_resultado)} serviço(s) divergente(s)** em {data_filtro.strftime('%d/%m/%Y')}")
 
             tab1, tab2, tab3 = st.tabs([
                 f"📋 Todos ({len(df_resultado)})",
                 f"🔵 Só em {sistema1} ({len(apenas_em_1)})",
-                f"🟠 Só em {sistema2} ({len(apenas_em_2)})"
+                f"🟠 Só em {sistema2} ({len(apenas_em_2)})",
             ])
-
             with tab1:
                 st.dataframe(df_resultado, use_container_width=True)
-
             with tab2:
-                df_tab1 = df_resultado[df_resultado["presente_em"] == sistema1]
-                if df_tab1.empty:
-                    st.info("Nenhum serviço exclusivo desta base.")
-                else:
-                    st.dataframe(df_tab1, use_container_width=True)
-
+                sub = df_resultado[df_resultado["presente_em"] == sistema1]
+                st.dataframe(sub, use_container_width=True) if not sub.empty else st.info("Sem exclusivos.")
             with tab3:
-                df_tab2 = df_resultado[df_resultado["presente_em"] == sistema2]
-                if df_tab2.empty:
-                    st.info("Nenhum serviço exclusivo desta base.")
-                else:
-                    st.dataframe(df_tab2, use_container_width=True)
+                sub = df_resultado[df_resultado["presente_em"] == sistema2]
+                st.dataframe(sub, use_container_width=True) if not sub.empty else st.info("Sem exclusivos.")
 
-            # Botão de download
             st.markdown("---")
             nome_saida = f"divergentes_{data_filtro.strftime('%d.%m')}_{sistema1}_vs_{sistema2}.xlsx"
             st.download_button(
@@ -187,12 +190,10 @@ if arquivo1 and arquivo2:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-        # Preview das bases filtradas (expansível)
         with st.expander(f"👁️ Ver base {sistema1} filtrada ({total1} registros)"):
-            st.dataframe(base1_filtrada, use_container_width=True)
-
+            st.dataframe(base1, use_container_width=True)
         with st.expander(f"👁️ Ver base {sistema2} filtrada ({total2} registros)"):
-            st.dataframe(base2_filtrada, use_container_width=True)
+            st.dataframe(base2, use_container_width=True)
 
     except Exception as e:
         st.error(f"❌ Erro ao processar: {e}")
