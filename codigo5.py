@@ -30,7 +30,7 @@ ALIASES_COLUNAS = {
     "Serviço":           ["Serviço", "Servico", "serviço"],
 }
 
-TIPO_EXCLUIDO_OPER = ["RESTABELECIMENTO FORNEC. NORMAL" , "RESTABELECIMENTO FORNEC. NORMAL - MUDANÇA TITULARIDADE"]
+TIPO_EXCLUIDO_OPER ="RESTABELECIMENTO FORNEC. NORMAL" 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
