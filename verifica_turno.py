@@ -275,11 +275,11 @@ elif aba == "⚙️ Configurações":
     t1, t2, t3 = st.tabs(["📁 Carregar Arquivo","📤 Exportar","📖 Manual"])
 
     with t1:
-        st.info("CSV deve ter: Prefixo · Início de Turno · Status Comercial · Intervalo · Tipo de Atividade · Mesa · Viatura · Operador")
-        up = st.file_uploader("Selecione o CSV do dia", type=["csv"])
+        st.info("XLSX deve ter: Prefixo · Início de Turno · Status Comercial · Intervalo · Tipo de Atividade · Mesa · Viatura · Operador")
+        up = st.file_uploader("Selecione o XLSX do dia", type=["xlsx"])
         if up:
             try:
-                dn = pd.read_csv(up)
+                dn = pd.read_excel(up)
                 dn["Início de Turno"] = pd.to_datetime(dn["Início de Turno"])
                 st.session_state.df_principal = dn
                 st.success(f"✅ {len(dn)} registros importados!")
@@ -303,10 +303,10 @@ elif aba == "⚙️ Configurações":
             de["Duração (min)"] = de["Prefixo"].map(lambda p: st.session_state.intervalos_info.get(p,{}).get("duracao_min",""))
             de["Tempo Turno (h)"] = de["Início de Turno"].apply(tempo_turno)
             st.dataframe(de, use_container_width=True)
-            buf = io.StringIO()
-            de.to_csv(buf, index=False, encoding="utf-8-sig")
-            st.download_button("⬇️ Baixar CSV", data=buf.getvalue().encode("utf-8-sig"),
-                               file_name=f"relatorio_{date.today():%Y%m%d}.csv", mime="text/csv")
+            buf = io.BytesIO()
+            de.to_excel(buf, index=False, engine="openpyxl")
+            st.download_button("⬇️ Baixar XLSX", data=buf.getvalue(),
+                               file_name=f"relatorio_{date.today():%Y%m%d}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             todos_flat = [p for g in PREFIXOS.values() for p in g]
             ativos = set(df["Prefixo"])
             resumo = {
@@ -332,5 +332,5 @@ elif aba == "⚙️ Configurações":
 **⚙️ Configurações** — Upload do CSV do dia + exportação do relatório final.
 
 ---
-**Formato CSV:** Prefixo · Início de Turno (YYYY-MM-DD HH:MM) · Status Comercial · Intervalo · Tipo de Atividade · Mesa · Viatura · Operador
+**Formato XLSX:** Prefixo · Início de Turno (YYYY-MM-DD HH:MM) · Status Comercial · Intervalo · Tipo de Atividade · Mesa · Viatura · Operador
         """)
