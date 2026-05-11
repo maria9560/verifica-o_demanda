@@ -187,8 +187,7 @@ elif aba == "⏸ Intervalos":
             with cb:
                 fim = st.time_input("Fim", value=info.get("fim", datetime.now().time()), key=f"f_{p}")
             with cc:
-                st.markdown("
-", unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("💾 Salvar", key=f"s_{p}"):
                     inicio_dt = pd.to_datetime(row["Início de Turno"])
                     fim_dt = datetime.combine(date.today(), fim)
